@@ -4,10 +4,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[("vendor/idm_engine.py", "vendor")],
-    hiddenimports=["idm_engine"],
+    hiddenimports=["idm_engine", "json", "struct", "hashlib", "tempfile", "shutil", "subprocess", "argparse", "ctypes", "datetime", "winreg"],
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "unittest", "email", "html", "http", "xml", "pydoc"],
+    excludes=["tkinter", "unittest"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

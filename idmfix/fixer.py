@@ -18,7 +18,7 @@ TARGET_KEYS = (
     "license_popup_52795", "license_popup_527B1", "license_popup_527F9", "counterfeit_broadcast_68220",
     "mdata_write_66C99", "mdata_write_120A54", "longtext_popup_75604", "latent_popup_79FF9",
     "registration_dialog_52812", "wrapper_shortcut_A_742E0", "wrapper_shortcut_B_1BE95",
-    "download_reg_dialog_94514", "corrupt_flag_gate_999F5", "corrupt_alert_exit_9AF81",
+    "download_reg_dialog_94514",
 )
 
 HELPERS = ("IDMMsgHost.exe", "IDMIntegrator64.exe", "idmBroker.exe",
@@ -121,6 +121,36 @@ def restore_helpers(names):
                 pass
 
 
+CORRUPT_FLAG_VA = 0x7893A0
+
+
+def find_corrupt_popup_branch(pe):
+    """Locate the gate that shows the corrupt dialog and return (offset, old, new).
+
+    The gate compares a global damaged flag and jumps over the dialog when clean.
+    Turning the conditional jump into an unconditional one makes the dialog branch
+    unreachable. The flag writer is intentionally left untouched: NOP-ing it would
+    leave the flag stuck at its previous value and re-trigger the dialog.
+    """
+    flag = CORRUPT_FLAG_VA
+    pattern = b"\x83\x3d" + flag.to_bytes(4, "little") + b"\x00" + b"\x74"
+    hits = []
+    start = 0
+    while True:
+        i = pe.data.find(pattern, start)
+        if i < 0:
+            break
+        hits.append(i)
+        start = i + 1
+    if len(hits) != 1:
+        return None
+    off = hits[0] + len(pattern) - 1
+    old = bytes(pe.data[off:off + 2])
+    if old[0] != 0x74:
+        return None
+    return off, old, bytes([0xEB, old[1]])
+
+
 def build_patched(original):
     sys.path.insert(0, config.vendor_dir())
     import idm_engine as engine
@@ -137,6 +167,15 @@ def build_patched(original):
         if site.key in TARGET_KEYS:
             data[site.offset:site.offset + len(site.new)] = site.new
             applied += 1
+    branch = find_corrupt_popup_branch(pe)
+    if branch is not None:
+        off, old, new = branch
+        data[off:off + len(new)] = new
+        applied += 1
+        log("   corrupt popup branch: disabled at file 0x%X" % off)
+    else:
+        log("   [warn] corrupt popup branch not located")
+
     log("   patch sites: %d / %d" % (applied, len(TARGET_KEYS)))
     if applied == 0:
         return None
