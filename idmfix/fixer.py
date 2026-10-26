@@ -8,6 +8,7 @@ import time
 import winreg
 
 from . import config
+from .notifications import apply_corrupt_notification_fix
 
 NO_WINDOW = 0x08000000
 
@@ -124,16 +125,17 @@ def restore_helpers(names):
 CORRUPT_FLAG_VA = 0x7893A0
 
 
-def find_corrupt_popup_branch(pe):
-    """Locate the gate that shows the corrupt dialog and return (offset, old, new).
+def find_corrupt_gate(pe):
+    """Return (offset, old, new) that neutralises the corrupt-dialog gate.
 
-    The gate compares a global damaged flag and jumps over the dialog when clean.
-    Turning the conditional jump into an unconditional one makes the dialog branch
-    unreachable. The flag writer is intentionally left untouched: NOP-ing it would
-    leave the flag stuck at its previous value and re-trigger the dialog.
+    The gate is `cmp dword ptr [flag], 0` followed by a jump that skips the dialog
+    call when the flag is clean. Replacing the two-byte jump with NOPs makes the
+    dialog call unconditional, which is the opposite of what is needed. Instead the
+    whole compare+jump is turned into NOPs so control always falls through to the
+    normal code path.
     """
     flag = CORRUPT_FLAG_VA
-    pattern = b"\x83\x3d" + flag.to_bytes(4, "little") + b"\x00" + b"\x74"
+    pattern = b"\x83\x3d" + flag.to_bytes(4, "little") + b"\x00\x74"
     hits = []
     start = 0
     while True:
@@ -144,11 +146,10 @@ def find_corrupt_popup_branch(pe):
         start = i + 1
     if len(hits) != 1:
         return None
-    off = hits[0] + len(pattern) - 1
-    old = bytes(pe.data[off:off + 2])
-    if old[0] != 0x74:
-        return None
-    return off, old, bytes([0xEB, old[1]])
+    off = hits[0]
+    old = bytes(pe.data[off:off + len(pattern) + 1])
+    new = b"\x90" * len(old)
+    return off, old, new
 
 
 def build_patched(original):
@@ -167,19 +168,27 @@ def build_patched(original):
         if site.key in TARGET_KEYS:
             data[site.offset:site.offset + len(site.new)] = site.new
             applied += 1
-    branch = find_corrupt_popup_branch(pe)
-    if branch is not None:
-        off, old, new = branch
+
+    gate = find_corrupt_gate(pe)
+    if gate is not None:
+        off, old, new = gate
         data[off:off + len(new)] = new
         applied += 1
-        log("   corrupt popup branch: disabled at file 0x%X" % off)
+        log("   corrupt gate: neutralised at file 0x%X" % off)
     else:
-        log("   [warn] corrupt popup branch not located")
+        log("   [warn] corrupt gate not located")
 
-    log("   patch sites: %d / %d" % (applied, len(TARGET_KEYS)))
     if applied == 0:
         return None
-    return bytes(data)
+    try:
+        fixed = apply_corrupt_notification_fix(bytes(data))
+    except ValueError as error:
+        log("   [!] unsupported notification layout: %s" % error)
+        return None
+    log("   patch sites: %d / %d" % (applied, len(TARGET_KEYS)))
+    log("   corrupt notice: disabled; repair page and hourly retry: disabled")
+    log("   PE checksum: recalculated")
+    return fixed
 
 
 def swap_in(new_bytes):
