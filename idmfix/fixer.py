@@ -122,36 +122,6 @@ def restore_helpers(names):
                 pass
 
 
-CORRUPT_FLAG_VA = 0x7893A0
-
-
-def find_corrupt_gate(pe):
-    """Return (offset, old, new) that neutralises the corrupt-dialog gate.
-
-    The gate is `cmp dword ptr [flag], 0` followed by a jump that skips the dialog
-    call when the flag is clean. Replacing the two-byte jump with NOPs makes the
-    dialog call unconditional, which is the opposite of what is needed. Instead the
-    whole compare+jump is turned into NOPs so control always falls through to the
-    normal code path.
-    """
-    flag = CORRUPT_FLAG_VA
-    pattern = b"\x83\x3d" + flag.to_bytes(4, "little") + b"\x00\x74"
-    hits = []
-    start = 0
-    while True:
-        i = pe.data.find(pattern, start)
-        if i < 0:
-            break
-        hits.append(i)
-        start = i + 1
-    if len(hits) != 1:
-        return None
-    off = hits[0]
-    old = bytes(pe.data[off:off + len(pattern) + 1])
-    new = b"\x90" * len(old)
-    return off, old, new
-
-
 def build_patched(original):
     sys.path.insert(0, config.vendor_dir())
     import idm_engine as engine
@@ -169,15 +139,6 @@ def build_patched(original):
             data[site.offset:site.offset + len(site.new)] = site.new
             applied += 1
 
-    gate = find_corrupt_gate(pe)
-    if gate is not None:
-        off, old, new = gate
-        data[off:off + len(new)] = new
-        applied += 1
-        log("   corrupt gate: neutralised at file 0x%X" % off)
-    else:
-        log("   [warn] corrupt gate not located")
-
     if applied == 0:
         return None
     try:
@@ -187,6 +148,7 @@ def build_patched(original):
         return None
     log("   patch sites: %d / %d" % (applied, len(TARGET_KEYS)))
     log("   corrupt notice: disabled; repair page and hourly retry: disabled")
+    log("   download notice: disabled; original gate and ASLR relocation: preserved")
     log("   PE checksum: recalculated")
     return fixed
 
